@@ -1,7 +1,7 @@
 streamlit
-tensorflow==2.12.0
-rasterio
-opencv-python-headless
-scikit-learn
-matplotlib
 gdown
+rasterio
+opencv-python
+matplotlib
+numpy
+tensorflow

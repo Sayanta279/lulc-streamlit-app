@@ -1,80 +1,89 @@
 import streamlit as st
 import numpy as np
-import tensorflow as tf
 import rasterio
-import cv2
 import os
-import matplotlib.pyplot as plt
+import cv2
 import gdown
+import tensorflow as tf
+import matplotlib.pyplot as plt
 from tempfile import NamedTemporaryFile
 from rasterio.plot import reshape_as_image
 
-# Download model from Google Drive if not exists
-MODEL_FILE = "unet_lulc_model.h5"
-MODEL_ID = "1vkeZmAIzop8K5MdsIK8o70xpEHN7YVH6"
+# ------------------- CONFIGURATION -----------------------
+MODEL_FOLDER_ID = "1z2Nm7bkE6zxq1_ro0B9JGETkTVk4sjwd"  # Your GDrive model folder ID
+MODEL_DIR = "unet_lulc_model_tf"  # Local folder name after download
 
+# ------------------- LOAD MODEL --------------------------
 @st.cache_resource
 def load_model():
-    if not os.path.exists(MODEL_FILE):
-        gdown.download(f"https://drive.google.com/uc?id={MODEL_ID}", MODEL_FILE, quiet=False)
-    return tf.keras.models.load_model(MODEL_FILE)
+    if not os.path.exists(MODEL_DIR):
+        # Download the entire folder
+        gdown.download_folder(id=MODEL_FOLDER_ID, quiet=False, use_cookies=False)
+    return tf.keras.models.load_model(MODEL_DIR)
 
 model = load_model()
 
+# ------------------- STREAMLIT UI ------------------------
 st.set_page_config(page_title="LULC Predictor", layout="wide")
 st.title("🛰️ Land Use Land Cover (LULC) Prediction")
 
-uploaded_files = st.file_uploader("Upload one or more .tif raster files", type=["tif", "tiff"], accept_multiple_files=True)
+uploaded_file = st.file_uploader("📂 Upload a GeoTIFF file", type=["tif", "tiff"])
 
-def classify_prediction(prediction_data, thresholds=[0.2, 0.4, 0.6, 0.8], class_values=[1, 2, 3, 4, 5]):
-    classified = np.zeros_like(prediction_data, dtype=np.int32)
-    for i, thresh in enumerate(thresholds):
-        if i == 0:
-            classified[prediction_data <= thresh] = class_values[i]
-        else:
-            classified[(prediction_data > thresholds[i-1]) & (prediction_data <= thresh)] = class_values[i]
-    classified[prediction_data > thresholds[-1]] = class_values[-1]
-    return classified
+if uploaded_file is not None:
+    with NamedTemporaryFile(delete=False, suffix=".tif") as tmp_file:
+        tmp_file.write(uploaded_file.read())
+        tmp_path = tmp_file.name
 
-if uploaded_files:
-    input_images, pred_images, class_images = [], [], []
+    with rasterio.open(tmp_path) as src:
+        input_data = src.read(1)
+        profile = src.profile
+        transform = src.transform
+        crs = src.crs
+        original_shape = input_data.shape
 
-    for uploaded_file in uploaded_files:
-        with NamedTemporaryFile(delete=False, suffix=".tif") as tmp_file:
-            tmp_file.write(uploaded_file.read())
-            tmp_path = tmp_file.name
+    # Resize to model input size (256x256)
+    input_resized = cv2.resize(input_data, (256, 256), interpolation=cv2.INTER_LINEAR)
+    input_resized = np.expand_dims(input_resized, axis=(0, -1))  # (1, 256, 256, 1)
 
-        with rasterio.open(tmp_path) as src:
-            input_data = src.read(1)
-            original_shape = input_data.shape
-            profile = src.profile
+    # Predict
+    prediction_resized = model.predict(input_resized)[0, :, :, 0]  # (256, 256)
+    prediction = cv2.resize(prediction_resized, original_shape[::-1], interpolation=cv2.INTER_LINEAR)
 
-        input_resized = cv2.resize(input_data, (256, 256), interpolation=cv2.INTER_LINEAR)
-        input_tensor = np.expand_dims(input_resized, axis=(0, -1))
+    # Threshold (optional): binarize or classify
+    prediction_classified = np.zeros_like(prediction, dtype=np.uint8)
+    prediction_classified[prediction > 0.5] = 1  # Binary mask
 
-        prediction = model.predict(input_tensor)[0, ..., 0]
-        prediction_resized = cv2.resize(prediction, original_shape[::-1], interpolation=cv2.INTER_LINEAR)
+    # Show visualizations
+    st.subheader("Original Raster")
+    fig1, ax1 = plt.subplots()
+    ax1.imshow(input_data, cmap='gray')
+    ax1.set_title("Input Image")
+    st.pyplot(fig1)
 
-        classified = classify_prediction(prediction_resized)
+    st.subheader("Predicted LULC Probability")
+    fig2, ax2 = plt.subplots()
+    ax2.imshow(prediction, cmap='viridis')
+    ax2.set_title("Predicted (Continuous)")
+    st.pyplot(fig2)
 
-        input_images.append(input_data)
-        pred_images.append(prediction_resized)
-        class_images.append(classified)
+    st.subheader("Classified LULC Mask")
+    fig3, ax3 = plt.subplots()
+    ax3.imshow(prediction_classified, cmap='tab10')
+    ax3.set_title("Predicted (Classified)")
+    st.pyplot(fig3)
 
-        # Save classified output
-        classified_path = tmp_path.replace(".tif", "_classified.tif")
-        profile.update(dtype=rasterio.int32, count=1)
-        with rasterio.open(classified_path, 'w', **profile) as dst:
-            dst.write(classified, 1)
+    # Option to download prediction
+    save_btn = st.button("📥 Download Predicted TIFF")
+    if save_btn:
+        output_path = tmp_path.replace(".tif", "_predicted.tif")
+        profile.update(dtype=rasterio.uint8, count=1, transform=transform, crs=crs)
+        with rasterio.open(output_path, 'w', **profile) as dst:
+            dst.write(prediction_classified.astype(rasterio.uint8), 1)
 
-        with open(classified_path, "rb") as f:
-            st.download_button(f"📥 Download {uploaded_file.name}_classified.tif", f, file_name=os.path.basename(classified_path))
-
-    # Visualization
-    st.subheader("🔍 Comparison")
-    for i in range(len(input_images)):
-        st.markdown(f"### File {i+1}")
-        col1, col2, col3 = st.columns(3)
-        col1.image(input_images[i], caption="Input", use_column_width=True, clamp=True)
-        col2.image(pred_images[i], caption="Prediction (probability)", use_column_width=True, clamp=True)
-        col3.image(class_images[i], caption="Classified Output", use_column_width=True, clamp=True)
+        with open(output_path, "rb") as f:
+            st.download_button(
+                label="Download Classified Prediction",
+                data=f,
+                file_name="lulc_predicted_classified.tif",
+                mime="application/octet-stream"
+            )

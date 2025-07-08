@@ -8,15 +8,20 @@ import cv2
 import matplotlib.pyplot as plt
 from utils.predictor import predict_tiff, classify_prediction, show_images
 from tempfile import NamedTemporaryFile
+import gdown
 
 # App Title
 st.set_page_config(layout="wide")
 st.title("🌍 Land Use Land Cover (LULC) Classification with Deep Learning")
 
-# Load Model
+# Load Model from Google Drive
 @st.cache_resource
 def load_model():
-    model_path = "model/saved_model"
+    model_path = "model/model.h5"
+    if not os.path.exists(model_path):
+        os.makedirs("model", exist_ok=True)
+        url = "https://drive.google.com/uc?id=1vkeZmAIzop8K5MdsIK8o70xpEHN7YVH6"
+        gdown.download(url, model_path, quiet=False)
     return tf.keras.models.load_model(model_path)
 
 model = load_model()

@@ -3,5 +3,5 @@ gdown
 rasterio
 opencv-python
 matplotlib
-numpy
-tensorflow
+numpy<2.0
+tensorflow==2.13.0

@@ -1,7 +1,7 @@
 streamlit
 gdown
-rasterio
-opencv-python
-matplotlib
 numpy<2.0
-tensorflow==2.13.0
+opencv-python
+rasterio
+tensorflow>=2.12,<2.16
+matplotlib
